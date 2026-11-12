@@ -1,4 +1,10 @@
-"""Run the publisher: ``python3 -m publisher``.
+"""Run the publisher.
+
+  python3 -m publisher                 serve the web UI
+  python3 -m publisher status          list decks and their status
+  python3 -m publisher publish ID...   publish (or republish) decks
+  python3 -m publisher unpublish ID... remove decks from the public site
+  python3 -m publisher rebuild         rebuild the public site from snapshots
 
 Configuration comes from environment variables:
 
@@ -16,12 +22,38 @@ import sys
 from pathlib import Path
 
 from .server import App, serve
-from .store import Store
+from .store import PublishError, Store
 
 DEFAULT_BUILD = "npx --no-install open-slide build --out-dir {out}"
+USAGE = __doc__.split("\n\n")[1]
 
 
-def main() -> int:
+def run_command(store: Store, args: list[str]) -> int:
+    command, ids = args[0], args[1:]
+    try:
+        if command == "status" and not ids:
+            for deck in store.decks():
+                when = f"  (published {deck.published_at})" if deck.published_at else ""
+                print(f"{deck.status:<10} {deck.id}{when}")
+        elif command in ("publish", "unpublish") and ids:
+            for deck_id in ids:
+                getattr(store, command)(deck_id)
+                print(f"{command}ed {deck_id}")
+        elif command == "rebuild" and not ids:
+            store.rebuild()
+            print("rebuilt")
+        else:
+            print(USAGE, file=sys.stderr)
+            return 2
+    except PublishError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        if exc.log:
+            print(exc.log[-4000:], file=sys.stderr)
+        return 1
+    return 0
+
+
+def main(argv: list[str]) -> int:
     try:
         workspace = Path(os.environ["STAGEDOOR_WORKSPACE"])
         data_dir = Path(os.environ["STAGEDOOR_DATA_DIR"])
@@ -31,12 +63,14 @@ def main() -> int:
     if not (workspace / "slides").is_dir():
         print(f"{workspace} does not look like an open-slide workspace", file=sys.stderr)
         return 2
-    host, _, port = os.environ.get("STAGEDOOR_LISTEN", "127.0.0.1:8090").rpartition(":")
     store = Store(workspace, data_dir, os.environ.get("STAGEDOOR_BUILD_CMD", DEFAULT_BUILD))
+    if argv:
+        return run_command(store, argv)
+    host, _, port = os.environ.get("STAGEDOOR_LISTEN", "127.0.0.1:8090").rpartition(":")
     app = App(store, os.environ.get("STAGEDOOR_BASE_PATH", "/publish"), os.environ.get("STAGEDOOR_PUBLIC_URL", ""))
     serve(app, host or "127.0.0.1", int(port))
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))
