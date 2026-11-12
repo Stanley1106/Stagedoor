@@ -10,7 +10,9 @@ Layout of the data directory::
     <data>/current           symlink to the release being served
     <data>/last-build.log    output of the most recent build
     <data>/published.json    per published deck: when it was last published
-                             (UTC, ISO 8601) and its mode, "live" or "paused"
+                             (UTC, ISO 8601), its mode ("live" or "paused") and,
+                             when the workspace is a git repo, the commit that
+                             holds the published content
 
 The live workspace is never modified. A deck is public only once its snapshot
 is in ``stage/slides`` and a build containing it has been swapped in.
@@ -34,6 +36,8 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+
+from .history import History, HistoryError
 
 SLIDE_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 TITLE_RE = re.compile(r"\btitle\s*:\s*(['\"`])(.+?)\1")
@@ -120,8 +124,9 @@ def _now_iso() -> str:
 
 
 class Store:
-    def __init__(self, workspace: Path, data_dir: Path, build_cmd: str):
+    def __init__(self, workspace: Path, data_dir: Path, build_cmd: str, history: History | None = None):
         self.workspace = Path(workspace)
+        self.history = history
         self.data = Path(data_dir)
         self.build_cmd = build_cmd
         self.stage = self.data / "stage"
@@ -192,9 +197,13 @@ class Store:
                 raise PublishError(f"Deck '{deck_id}' does not exist in the workspace.")
             source = self.live_slides / deck_id
             mode = self._state().get(deck_id, {}).get("mode", LIVE)
+            rev = self._record_version(deck_id)
             self._change_and_build(deck_id, lambda target: shutil.copytree(source, target))
             self._sync_failures.pop(deck_id, None)
-            self._set_state(deck_id, {"published_at": _now_iso(), "mode": mode})
+            entry = {"published_at": _now_iso(), "mode": mode}
+            if rev:
+                entry["rev"] = rev
+            self._set_state(deck_id, entry)
 
     def unpublish(self, deck_id: str) -> None:
         self._check_id(deck_id)
@@ -204,6 +213,23 @@ class Store:
             self._change_and_build(deck_id, lambda target: None)
             self._sync_failures.pop(deck_id, None)
             self._set_state(deck_id, None)
+
+    def restore(self, deck_id: str, rev: str) -> tuple[str, str | None]:
+        """Put a deck's editor copy back to ``rev``; see History.restore."""
+        self._check_id(deck_id)
+        if not (self.history and self.history.available()):
+            raise PublishError("Version history needs the workspace to be a git repository.")
+        with self.lock:
+            try:
+                return self.history.restore(deck_id, rev)
+            except HistoryError as exc:
+                raise PublishError(str(exc)) from exc
+
+    def public_rev(self, deck_id: str) -> str | None:
+        """The commit holding the deck's public content, if known."""
+        if deck_id not in _deck_ids(self.stage_slides):
+            return None
+        return self._state().get(deck_id, {}).get("rev")
 
     def pause(self, deck_id: str) -> None:
         self._set_mode(deck_id, PAUSED)
@@ -245,6 +271,15 @@ class Store:
         return synced
 
     # ---- internals ------------------------------------------------------
+
+    def _record_version(self, deck_id: str) -> str | None:
+        """Commit what is about to go public so it can be restored later."""
+        if not (self.history and self.history.available()):
+            return None
+        try:
+            return self.history.commit(deck_id, f"publish: {deck_id}")
+        except HistoryError:
+            return None  # history is a safety net; never block publishing on it
 
     def _state(self) -> dict[str, dict]:
         try:

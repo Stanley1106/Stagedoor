@@ -7,6 +7,8 @@
   python3 -m publisher pause ID...     freeze the public copy of decks
   python3 -m publisher resume ID...    let decks follow the editor again
   python3 -m publisher sync            push every live deck's pending edits now
+  python3 -m publisher history ID      list a deck's saved versions, newest first
+  python3 -m publisher restore ID REV  put a deck back to an earlier version (undoable)
   python3 -m publisher rebuild         rebuild the public site from snapshots
 
 Configuration comes from environment variables:
@@ -27,6 +29,7 @@ from pathlib import Path
 
 from . import sync
 from .server import App, serve
+from .history import History
 from .store import PublishError, Store
 
 DEFAULT_BUILD = "npx --no-install open-slide build --out-dir {out}"
@@ -53,6 +56,16 @@ def run_command(store: Store, args: list[str]) -> int:
                 print(f"error: {deck.id}: {deck.sync_error}", file=sys.stderr)
             if failed:
                 return 1
+        elif command == "history" and len(ids) == 1:
+            if not (store.history and store.history.available()):
+                raise PublishError("Version history needs the workspace to be a git repository.")
+            public = store.public_rev(ids[0])
+            for v in store.history.versions(ids[0]):
+                mark = "  (public)" if v.rev == public else ""
+                print(f"{v.short}  {v.at}  +{v.added}/-{v.removed}  {v.subject}{mark}")
+        elif command == "restore" and len(ids) == 2:
+            _, undo = store.restore(ids[0], ids[1])
+            print(f"restored {ids[0]} to {ids[1][:7]}" + (f"; undo with: restore {ids[0]} {undo[:7]}" if undo else ""))
         elif command == "rebuild" and not ids:
             store.rebuild()
             print("rebuilt")
@@ -77,7 +90,9 @@ def main(argv: list[str]) -> int:
     if not (workspace / "slides").is_dir():
         print(f"{workspace} does not look like an open-slide workspace", file=sys.stderr)
         return 2
-    store = Store(workspace, data_dir, os.environ.get("STAGEDOOR_BUILD_CMD", DEFAULT_BUILD))
+    store = Store(
+        workspace, data_dir, os.environ.get("STAGEDOOR_BUILD_CMD", DEFAULT_BUILD), history=History(workspace)
+    )
     if argv:
         return run_command(store, argv)
     host, _, port = os.environ.get("STAGEDOOR_LISTEN", "127.0.0.1:8090").rpartition(":")
