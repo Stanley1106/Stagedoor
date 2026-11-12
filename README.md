@@ -1,11 +1,12 @@
 # Stagedoor
 
-Draft & publish for open-slide.
+Draft, publish & restore for open-slide.
 
 Run an [open-slide](https://github.com/open-slide/open-slide) editor on your
 own server, and choose **deck by deck** what appears on a public, read-only
 site. Drafts stay private; published decks follow your edits automatically,
-unless you pause them.
+unless you pause them. Every edit session is saved, so when an agent (or you)
+breaks a deck, you can put it back.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshot-dark.png">
@@ -23,15 +24,20 @@ deploy. When the editor lives on a server instead, two things are missing:
 - **Drafts.** A build includes every deck in `slides/`, so half-finished
   decks go public with the next build.
 - **A publish step.** Rebuilding means logging in to the server.
+- **A way back.** Inspector undo is cleared on save
+  ([open-slide#568](https://github.com/open-slide/open-slide/issues/568)), and
+  the agent panel rewinds the conversation but not the files it changed. In a
+  browser there is no git to fall back on.
 
 Stagedoor works like Google Slides' *Publish to the web*: publishing decides
 *whether* a deck is public, and from then on the public copy keeps up with
 the editor. Like Netlify's *Stop auto publishing*, you can pause a deck to
-freeze what visitors see while you rework it.
+freeze what visitors see while you rework it. Like Google Slides' version
+history, any earlier version can be restored, and restoring can be undone.
 
-This repo adds a small publisher next to the editor. It does not patch
-open-slide; it only relies on the `open-slide build` CLI and the documented
-`slides/<id>/index.tsx` layout, so open-slide upgrades don't break it.
+It runs next to the editor and never patches open-slide: it relies only on
+the `open-slide build` CLI, the documented `slides/<id>/index.tsx` layout and
+git, so open-slide upgrades don't break it.
 
 ## What you get
 
@@ -41,7 +47,17 @@ open-slide; it only relies on the `open-slide build` CLI and the documented
 | The full open-slide UI, behind your login. | Just the slides. Arrow keys and `?p=3` work; the deck list and toolbar are hidden. |
 
 The publish page lives at `slides-edit.example.com/publish`, behind the same
-login.
+login. Each deck links to its **History**:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/history-dark.png">
+  <img alt="History page: versions grouped by day, marked Current and Public, each with a Restore button" src="docs/history-light.png">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/restore-dialog-dark.png">
+  <img alt="Restore confirmation explaining the current version is kept and the public site follows a minute later" src="docs/restore-dialog-light.png">
+</picture>
 
 ## How it works
 
@@ -49,6 +65,7 @@ login.
                    ┌──────────────────── container ─────────────────────┐
 slides-edit.…  ──► │ open-slide dev          127.0.0.1:5173  (editor)    │
   (behind Access)  │ publisher  /publish     127.0.0.1:8090              │
+                   │ slides-autosave   ~/deck/slides ──► git commits     │
                    │      │ snapshot + build                             │
                    │      ▼                                              │
 slides.…       ──► │ Caddy  ~/publish/current  127.0.0.1:8080  (public)  │
@@ -68,6 +85,13 @@ slides.…       ──► │ Caddy  ~/publish/current  127.0.0.1:8080  (public
 - **A failed build** rolls the snapshot back and leaves the public site as it
   was. A live deck that fails to build shows *Sync failed* and is retried
   after your next edit, not in a loop.
+- **Autosave** commits `slides/` to git about 30 seconds after edits stop
+  (at least every 5 minutes during long agent runs), whoever made them:
+  inspector, agent panel or a text editor. Every publish is committed too and
+  marked *Public*.
+- **Restore** writes an earlier version back into the editor and commits it.
+  What was there before is committed first, so *Undo* is one click. A live
+  deck then syncs as usual; a paused one stays frozen until you publish.
 
 | Status | Public? | Updates |
 | --- | --- | --- |
@@ -92,10 +116,11 @@ own: the editor's agent panel can run commands in it.
    EDIT_HOST=slides-edit.example.com PUBLIC_HOST=slides.example.com ./deploy/install.sh
    ```
 
-   It installs Node 22, Caddy and cloudflared, creates a `slide` user with an
-   open-slide workspace in `~/deck`, and starts three services, all listening
-   on `127.0.0.1` only. Re-running it updates the publisher and keeps your
-   workspace, config and published decks.
+   It installs Node 22, Caddy, cloudflared and inotify-tools, creates a
+   `slide` user with an open-slide workspace (a git repository) in `~/deck`,
+   and starts the editor, the publisher, autosave and Caddy, all on
+   `127.0.0.1` only. Re-running it updates Stagedoor and keeps your workspace,
+   config, history and published decks.
 
 2. **Create a Cloudflare Tunnel** (Zero Trust → Networks → Tunnels), then
    store its token in the container and start it:
@@ -123,6 +148,12 @@ The tunnel only makes outbound connections, so this works behind NAT and
 campus or office firewalls. The cloudflared unit uses HTTP/2 over IPv4,
 which connects right away on networks that block QUIC (UDP 7844).
 
+### Reference deployment
+
+The installer, Caddyfile and tunnel steps are one tested way to run
+Stagedoor, not a requirement. The publisher only needs a workspace, a data
+directory and something in front that authenticates `/publish`.
+
 ### Proxmox notes
 
 `deploy/pve/` has the host-side files from the reference setup: a private NAT
@@ -136,6 +167,7 @@ resolvers with `pct set <vmid> --nameserver "<ip> <ip>"`.
 | --- | --- |
 | Edit | `https://slides-edit.example.com` |
 | Publish | `https://slides-edit.example.com/publish` |
+| History | `https://slides-edit.example.com/publish/history/<deck-id>` |
 | Share | `https://slides.example.com/<deck-id>` — redirects to `/s/<deck-id>`; add `?p=3` to open page 3 |
 
 The same actions from a shell in the container:
@@ -146,7 +178,8 @@ runuser -u slide -- bash -c 'set -a; . /etc/stagedoor/publisher.env
 ```
 
 Commands: `status`, `publish <id>...`, `unpublish <id>...`, `pause <id>...`,
-`resume <id>...`, `sync` (push pending edits of live decks now) and `rebuild`.
+`resume <id>...`, `sync` (push pending edits of live decks now), `history <id>`,
+`restore <id> <rev>` and `rebuild`.
 
 ## Configuration
 
@@ -166,6 +199,21 @@ The public build hides open-slide's deck browser and toolbar through the
 `build` options in `open-slide.config.ts`; the installer sets them for new
 workspaces.
 
+Autosave reads `QUIET` (default `30`) and `MAX_WAIT` (default `300`) seconds
+from its systemd unit.
+
+## Scope
+
+Stagedoor controls **what is public** and **gets you back** from a bad edit.
+
+| In scope | Not in scope |
+| --- | --- |
+| Drafts, publish, unpublish, live sync, pause | Editing slides: that's open-slide |
+| Atomic, rolled-back builds; short public links | Undo inside the editor ([open-slide#568](https://github.com/open-slide/open-slide/issues/568)) |
+| Versions saved after each edit session and publish | Previews of old versions: restore, check in the editor, undo if wrong |
+| Restore and undo, from the browser or the CLI | Accounts and permissions: use Cloudflare Access or similar |
+| | Patching or forking open-slide |
+
 ## Limitations
 
 - `themes/` and `assets/` are shared by every deck and are copied on each
@@ -175,6 +223,10 @@ workspaces.
   `slides/` from outside the editor, restart it with
   `systemctl restart openslide-dev`.
 - One build runs at a time; a publish takes a few seconds.
+- History covers `slides/<id>`. Shared `themes/` and `assets/` are not
+  versioned per deck.
+- Edits made in the last ~30 seconds aren't in history yet; the History page
+  says so when that's the case.
 
 ## Upgrading open-slide
 
