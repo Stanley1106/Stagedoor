@@ -3,12 +3,13 @@
 Draft & publish for open-slide.
 
 Run an [open-slide](https://github.com/open-slide/open-slide) editor on your
-own server, and publish decks to a public, read-only site **one deck at a
-time**. Edits stay private until you press Publish.
+own server, and choose **deck by deck** what appears on a public, read-only
+site. Drafts stay private; published decks follow your edits automatically,
+unless you pause them.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshot-dark.png">
-  <img alt="Publish page listing a draft deck and a deck with unpublished changes" src="docs/screenshot-light.png">
+  <img alt="Publish page with a draft, a paused deck with unpublished changes, a live deck syncing and a live deck" src="docs/screenshot-light.png">
 </picture>
 
 > Unofficial. Not affiliated with the open-slide project.
@@ -22,6 +23,11 @@ deploy. When the editor lives on a server instead, two things are missing:
 - **Drafts.** A build includes every deck in `slides/`, so half-finished
   decks go public with the next build.
 - **A publish step.** Rebuilding means logging in to the server.
+
+Stagedoor works like Google Slides' *Publish to the web*: publishing decides
+*whether* a deck is public, and from then on the public copy keeps up with
+the editor. Like Netlify's *Stop auto publishing*, you can pause a deck to
+freeze what visitors see while you rework it.
 
 This repo adds a small publisher next to the editor. It does not patch
 open-slide; it only relies on the `open-slide build` CLI and the documented
@@ -52,14 +58,25 @@ slides.…       ──► │ Caddy  ~/publish/current  127.0.0.1:8080  (public
 - **Publish** copies `slides/<id>` into a separate build workspace, runs
   `open-slide build` there, and atomically swaps the new release in. Only
   published decks are in the public build.
-- **Keep editing** after publishing: the public copy doesn't change until you
-  publish again. The page shows *Unpublished changes* meanwhile.
+- **Live** is where a deck goes once published. When you edit it, the public
+  copy updates about a minute after you stop, so half-made changes don't
+  flash up mid-edit. *Sync Now* skips the wait.
+- **Pause** freezes the public copy. Edits pile up as *unpublished changes*;
+  *Publish Changes* pushes them once and stays paused, *Resume* goes live
+  again.
 - **Unpublish** removes the deck and rebuilds.
-- **A failed build** rolls the snapshot back, leaves the public site as it
-  was, and shows the build log.
+- **A failed build** rolls the snapshot back and leaves the public site as it
+  was. A live deck that fails to build shows *Sync failed* and is retried
+  after your next edit, not in a loop.
 
-Statuses: **Draft** (never published) · **Published** · **Unpublished
-changes** · **Deleted in editor** (still public, gone from the editor).
+| Status | Public? | Updates |
+| --- | --- | --- |
+| Draft | no | — |
+| Live | yes | automatically, after edits settle |
+| Live · syncing | yes | edits are waiting to go out |
+| Paused | yes | only when you publish |
+| Paused · unpublished changes | yes | editor is ahead of the public copy |
+| Deleted in editor | yes | gone from the editor; unpublish to remove |
 
 ## Install
 
@@ -128,7 +145,8 @@ runuser -u slide -- bash -c 'set -a; . /etc/stagedoor/publisher.env
   cd /opt/stagedoor && python3 -m publisher status'
 ```
 
-`status`, `publish <id>...`, `unpublish <id>...` and `rebuild` are available.
+Commands: `status`, `publish <id>...`, `unpublish <id>...`, `pause <id>...`,
+`resume <id>...`, `sync` (push pending edits of live decks now) and `rebuild`.
 
 ## Configuration
 
@@ -142,6 +160,7 @@ The publisher reads `/etc/stagedoor/publisher.env`:
 | `STAGEDOOR_BASE_PATH` | `/publish` | must match the tunnel path rule |
 | `STAGEDOOR_PUBLIC_URL` | — | e.g. `https://slides.example.com/s/{id}`, for *View Public* links |
 | `STAGEDOOR_BUILD_CMD` | `npx --no-install open-slide build --out-dir {out}` | |
+| `STAGEDOOR_SYNC_DELAY` | `60` | seconds a live deck must sit unedited before it syncs |
 
 The public build hides open-slide's deck browser and toolbar through the
 `build` options in `open-slide.config.ts`; the installer sets them for new
@@ -150,8 +169,8 @@ workspaces.
 ## Limitations
 
 - `themes/` and `assets/` are shared by every deck and are copied on each
-  publish. Editing a shared theme reaches the public site the next time
-  *any* deck is published.
+  build. Editing a shared theme reaches the public site the next time *any*
+  deck is published or synced, and doesn't by itself trigger a sync.
 - The editor finds decks when it starts. If you copy a deck folder into
   `slides/` from outside the editor, restart it with
   `systemctl restart openslide-dev`.
