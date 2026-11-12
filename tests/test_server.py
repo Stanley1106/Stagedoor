@@ -62,6 +62,29 @@ class ServerTest(unittest.TestCase):
         self.assertIn("View Public", page)
         self.assertIn("https://slides.example.com/s/alpha", page)
 
+    def test_live_deck_offers_pause_then_resume(self):
+        self.request("POST", "/publish/publish", {"id": "alpha"})
+        _, page = self.request("GET", "/publish/")
+        self.assertIn(">Live<", page)
+        self.assertIn('action="/publish/pause"', page)
+        resp, _ = self.request("POST", "/publish/pause", {"id": "alpha"})
+        self.assertIn("msg=Paused", resp.getheader("Location"))
+        _, page = self.request("GET", "/publish/")
+        self.assertIn(">Paused<", page)
+        self.assertIn('action="/publish/resume"', page)
+
+    def test_pending_states(self):
+        self.request("POST", "/publish/publish", {"id": "alpha"})
+        self.request("POST", "/publish/publish", {"id": "beta"})
+        self.request("POST", "/publish/pause", {"id": "beta"})
+        self.fixture.add_deck("alpha", "Alpha deck", body="v2")
+        self.fixture.add_deck("beta", "Beta deck", body="v2")
+        _, page = self.request("GET", "/publish/")
+        self.assertIn("Live · syncing", page)
+        self.assertIn("Sync Now", page)
+        self.assertIn("Paused · unpublished changes", page)
+        self.assertIn("Publish Changes", page)
+
     def test_post_without_origin_is_refused(self):
         resp, _ = self.request("POST", "/publish/publish", {"id": "alpha"}, origin=None)
         self.assertEqual(resp.status, 403)

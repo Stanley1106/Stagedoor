@@ -16,17 +16,41 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlsplit
 
-from .store import DRAFT, MODIFIED, ORPHANED, PUBLISHED, PublishError, Store
+from .store import DRAFT, LIVE, MODIFIED, ORPHANED, PAUSED, PublishError, Store
 
 FONT_PATH = Path("node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2")
 
-STATUS = {
-    # status: (label, explanation)
-    PUBLISHED: ("Published", "Public copy matches the editor."),
-    MODIFIED: ("Unpublished changes", "The editor has changes the public site doesn’t."),
-    DRAFT: ("Draft", "Only visible in the editor."),
-    ORPHANED: ("Deleted in editor", "Gone from the editor but still public."),
+ACTIONS = {
+    # action: (verb for the confirmation notice, extra sentence)
+    "publish": ("Published", ""),
+    "unpublish": ("Unpublished", ""),
+    "pause": ("Paused", " Its public copy stays as it is until you resume."),
+    "resume": ("Resumed", " Edits will go public automatically again."),
 }
+
+
+def describe(deck, delay: int) -> tuple[str, str, str]:
+    """(css state, label, explanation) for a deck's status line."""
+    if deck.status == DRAFT:
+        return "draft", "Draft", "Only visible in the editor."
+    if deck.status == ORPHANED:
+        return "orphaned", "Deleted in editor", "Gone from the editor but still public."
+    if deck.mode == PAUSED:
+        if deck.status == MODIFIED:
+            return "pending", "Paused · unpublished changes", "The public copy is frozen. Publish to push these edits once."
+        return "paused", "Paused", "The public copy is frozen until you resume."
+    if deck.status == MODIFIED:
+        if deck.sync_error:
+            return "failed", "Sync failed", deck.sync_error + " Edit the deck to retry, or use Sync Now to see the log."
+        return "syncing", "Live · syncing", f"Edits go public about {_duration(delay)} after you stop editing."
+    return "live", "Live", "The public copy follows the editor."
+
+
+def _duration(seconds: int) -> str:
+    if seconds % 60 == 0 and seconds >= 60:
+        minutes = seconds // 60
+        return "a minute" if minutes == 1 else f"{minutes} minutes"
+    return f"{seconds} seconds"
 
 CSS = """
 @font-face {
@@ -135,13 +159,16 @@ h1 {
 
 .status { display: inline-flex; align-items: center; gap: 6px; color: var(--foreground); }
 .dot { width: 6px; height: 6px; border-radius: 999px; flex: none; }
-.s-published .dot { background: var(--foreground); }
-.s-modified { color: var(--brand); }
-.s-modified .dot { background: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
+.s-live .dot { background: var(--foreground); }
+.s-syncing .dot { background: var(--foreground); animation: pulse 1.6s var(--ease-swift) infinite; }
+.s-paused .dot { box-shadow: inset 0 0 0 1.5px var(--foreground); }
+.s-pending { color: var(--brand); }
+.s-pending .dot { background: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
 .s-draft { color: var(--muted-foreground); }
 .s-draft .dot { box-shadow: inset 0 0 0 1px var(--muted-foreground); }
-.s-orphaned { color: var(--destructive); }
-.s-orphaned .dot { background: var(--destructive); }
+.s-failed, .s-orphaned { color: var(--destructive); }
+.s-failed .dot, .s-orphaned .dot { background: var(--destructive); }
+@keyframes pulse { 50% { opacity: 0.25; } }
 
 .actions { display: flex; gap: 6px; justify-content: flex-end; }
 form { margin: 0; }
@@ -178,7 +205,7 @@ form { margin: 0; }
 @keyframes rise-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .rise-in { animation: rise-in 350ms var(--ease-swift) both; }
 @media (prefers-reduced-motion: reduce) {
-  .rise-in { animation: none; }
+  .rise-in, .s-syncing .dot { animation: none; }
   .btn, .meta a { transition: none; }
 }
 """
@@ -197,10 +224,16 @@ document.querySelectorAll("time[datetime]").forEach(function (el) {
   el.textContent = text;
   el.title = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(then);
 });
+var submitting = false;
+if (document.querySelector(".s-syncing")) {
+  // A background sync is due; refresh to show it once it lands.
+  setTimeout(function () { if (!submitting) location.replace(location.pathname); }, 15000);
+}
 document.addEventListener("submit", function (event) {
   var form = event.target;
   var message = form.getAttribute("data-confirm");
   if (message && !window.confirm(message)) { event.preventDefault(); return; }
+  submitting = true;
   document.querySelectorAll("form button").forEach(function (b) { b.disabled = true; });
   var button = form.querySelector("button");
   if (button) button.textContent = button.getAttribute("data-pending");
@@ -224,7 +257,7 @@ PAGE = """<!doctype html>
 <header>
 <p class="eyebrow">Stagedoor</p>
 <div class="heading"><h1>Publish</h1><span class="folio">{count}</span></div>
-<p class="lede">Edits stay in the editor until you publish. Publishing snapshots a deck and rebuilds the public site.</p>
+<p class="lede">Drafts stay in the editor. Once published, a deck follows your edits{sync_note}; pause it to freeze the public copy.</p>
 </header>
 <div aria-live="polite">{notice}</div>
 {decks}
@@ -241,10 +274,11 @@ def _e(value: str) -> str:
 
 
 class App:
-    def __init__(self, store: Store, base_path: str = "/publish", public_url: str = ""):
+    def __init__(self, store: Store, base_path: str = "/publish", public_url: str = "", sync_delay: int = 60):
         self.store = store
         self.base = "/" + base_path.strip("/") if base_path.strip("/") else ""
         self.public_url = public_url  # e.g. "https://slides.example.com/s/{id}"
+        self.sync_delay = sync_delay
 
     def font(self) -> bytes | None:
         try:
@@ -272,14 +306,15 @@ class App:
             css=CSS.replace("{base}", self.base),
             script=SCRIPT,
             count=f"{len(decks):02d}",
+            sync_note=f" about {_duration(self.sync_delay)} after you stop editing",
             notice=notice_html,
             decks=decks_html,
         )
 
     def _row(self, deck, index: int) -> str:
-        label, hint = STATUS[deck.status]
+        state, label, hint = describe(deck, self.sync_delay)
         meta = [
-            f'<span class="status s-{deck.status}" title="{_e(hint)}">'
+            f'<span class="status s-{state}" title="{_e(hint)}">'
             f'<span class="dot" aria-hidden="true"></span>{_e(label)}</span>',
             f'<span class="mono" translate="no">{_e(deck.id)}</span>',
         ]
@@ -291,8 +326,14 @@ class App:
         buttons = []
         if deck.status == DRAFT:
             buttons.append(self._button("publish", deck.id, "Publish", "Publishing…", "btn-default"))
-        elif deck.status == MODIFIED:
-            buttons.append(self._button("publish", deck.id, "Publish Changes", "Publishing…", "btn-brand"))
+        elif deck.mode == PAUSED:
+            if deck.status == MODIFIED:
+                buttons.append(self._button("publish", deck.id, "Publish Changes", "Publishing…", "btn-brand"))
+            buttons.append(self._button("resume", deck.id, "Resume", "Resuming…", "btn-outline"))
+        elif deck.mode == LIVE and deck.status != ORPHANED:
+            if deck.status == MODIFIED:
+                buttons.append(self._button("publish", deck.id, "Sync Now", "Syncing…", "btn-default"))
+            buttons.append(self._button("pause", deck.id, "Pause", "Pausing…", "btn-outline"))
         if deck.status != DRAFT:
             confirm = f"Unpublish “{deck.title}”? It will disappear from the public site."
             buttons.append(
@@ -340,7 +381,7 @@ def make_handler(app: App):
         def do_POST(self):
             path = urlsplit(self.path).path
             action = path[len(app.base) + 1 :] if path.startswith(app.base + "/") else ""
-            if action not in ("publish", "unpublish"):
+            if action not in ACTIONS:
                 return self._send(HTTPStatus.NOT_FOUND, b"not found\n", "text/plain; charset=utf-8")
             if not self._same_origin():
                 return self._send(HTTPStatus.FORBIDDEN, b"cross-origin request refused\n", "text/plain; charset=utf-8")
@@ -352,9 +393,9 @@ def make_handler(app: App):
             except PublishError as exc:
                 hint = " Fix the error below in the editor, then try again." if exc.log else ""
                 return self._html(HTTPStatus.OK, app.render(str(exc) + hint, "err", exc.log))
-            verb = "Published" if action == "publish" else "Unpublished"
+            verb, extra = ACTIONS[action]
             self.send_response(HTTPStatus.SEE_OTHER)
-            self.send_header("Location", f"{app.base}/?msg={quote(f'{verb} {deck_id}.')}")
+            self.send_header("Location", f"{app.base}/?msg={quote(f'{verb} {deck_id}.{extra}')}")
             self.send_header("Content-Length", "0")
             self.end_headers()
 

@@ -29,8 +29,24 @@ class CliTest(unittest.TestCase):
         self.assertEqual(self.run_cli("publish", "alpha", "beta")[0], 0)
         code, out, _ = self.run_cli("status")
         self.assertEqual(code, 0)
-        self.assertRegex(out, r"published\s+alpha")
-        self.assertRegex(out, r"published\s+beta")
+        self.assertRegex(out, r"published\s+live\s+alpha")
+        self.assertRegex(out, r"published\s+live\s+beta")
+
+    def test_pause_resume_and_sync(self):
+        self.run_cli("publish", "alpha")
+        self.assertEqual(self.run_cli("pause", "alpha")[:2], (0, "paused alpha\n"))
+        self.fixture.add_deck("alpha", "Alpha deck", body="v2")
+        self.assertEqual(self.run_cli("sync")[1], "nothing to sync\n")  # paused
+        self.assertEqual(self.run_cli("resume", "alpha")[:2], (0, "resumed alpha\n"))
+        self.assertEqual(self.run_cli("sync")[1], "synced alpha\n")
+
+    def test_sync_reports_failures(self):
+        self.run_cli("publish", "alpha")
+        self.fixture.add_deck("alpha", "Alpha deck", body="v2")
+        (self.fixture.ws / "slides" / "alpha" / "FAIL").write_text("")
+        code, _, err = self.run_cli("sync")
+        self.assertEqual(code, 1)
+        self.assertIn("alpha: Build failed", err)
 
     def test_failure_returns_1_with_log(self):
         (self.fixture.ws / "slides" / "alpha" / "FAIL").write_text("")
