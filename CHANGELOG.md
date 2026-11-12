@@ -6,6 +6,25 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-12
+
+### Added
+
+- Version history per deck at `/publish/history/<id>`: versions grouped by
+  day, marked Current and Public, with Restore and a one-click Undo.
+  `history` and `restore` commands do the same from a shell.
+- `slides-autosave`: commits `slides/` to git about 30 seconds after edits
+  stop, whether they come from the inspector, the agent panel or an editor.
+  The installer sets it up.
+- Every publish is committed and recorded as the deck's public version.
+
+### Changed
+
+- Unpublish and restore confirm in a dialog styled like open-slide's, not the
+  browser's `confirm()`.
+- README: scope and non-goals; the installer is described as a reference
+  deployment.
+
 ## [0.2.0] - 2026-11-12
 
 ### Added
@@ -33,6 +52,7 @@ and the project uses [Semantic Versioning](https://semver.org/).
 - `deploy/install.sh` for Ubuntu/Debian, systemd units, a Caddyfile with
   `/<deck>` short links, and Proxmox network examples.
 
-[Unreleased]: https://github.com/Stanley1106/stagedoor/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Stanley1106/stagedoor/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Stanley1106/stagedoor/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Stanley1106/stagedoor/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Stanley1106/stagedoor/releases/tag/v0.1.0
