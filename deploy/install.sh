@@ -97,7 +97,8 @@ if [[ -f /etc/caddy/Caddyfile ]] && ! cmp -s "${REPO_DIR}/deploy/caddy/Caddyfile
   cp /etc/caddy/Caddyfile "/etc/caddy/Caddyfile.$(date +%Y%m%d%H%M%S).bak"
 fi
 sed "s#/home/slide#${HOME_DIR}#g" "${REPO_DIR}/deploy/caddy/Caddyfile" > /etc/caddy/Caddyfile
-caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null
+caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1 \
+  || { caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile; exit 1; }
 
 systemctl daemon-reload
 systemctl enable -q openslide-dev stagedoor caddy
@@ -122,8 +123,9 @@ cat <<EOF
 Done. ${tunnel_note}
 
 Tunnel ingress rules, in this order:
-  ${EDIT_HOST}  path ^/publish(/|\$)  ->  http://127.0.0.1:8090
-  ${EDIT_HOST}                        ->  http://127.0.0.1:5173
-  ${PUBLIC_HOST}                      ->  http://127.0.0.1:8080
-Protect ${EDIT_HOST} with an access policy (e.g. Cloudflare Access).
 EOF
+printf '  %-40s %-20s -> %s\n' \
+  "${EDIT_HOST}" "path ^/publish(/|\$)" "http://127.0.0.1:8090" \
+  "${EDIT_HOST}" "" "http://127.0.0.1:5173" \
+  "${PUBLIC_HOST}" "" "http://127.0.0.1:8080"
+echo "Protect ${EDIT_HOST} with an access policy (e.g. Cloudflare Access)."
