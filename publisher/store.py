@@ -9,6 +9,7 @@ Layout of the data directory::
     <data>/releases/<ts>/    output of each successful build
     <data>/current           symlink to the release being served
     <data>/last-build.log    output of the most recent build
+    <data>/published.json    when each deck was last published (UTC, ISO 8601)
 
 The live workspace is never modified. A deck is public only once its snapshot
 is in ``stage/slides`` and a build containing it has been swapped in.
@@ -17,6 +18,7 @@ is in ``stage/slides`` and a build containing it has been swapped in.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import shlex
@@ -24,6 +26,7 @@ import shutil
 import subprocess
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 SLIDE_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -54,6 +57,7 @@ class Deck:
     id: str
     title: str
     status: str
+    published_at: str | None = None
 
 
 def tree_hash(root: Path) -> str:
@@ -94,6 +98,7 @@ class Store:
         self.releases = self.data / "releases"
         self.current = self.data / "current"
         self.log_file = self.data / "last-build.log"
+        self.times_file = self.data / "published.json"
 
     @property
     def live_slides(self) -> Path:
@@ -108,6 +113,7 @@ class Store:
     def decks(self) -> list[Deck]:
         live = _deck_ids(self.live_slides)
         public = _deck_ids(self.stage_slides)
+        times = self._times()
         result = []
         for deck_id in sorted(live | public):
             if deck_id not in public:
@@ -120,7 +126,8 @@ class Store:
                 status = MODIFIED
             source = self.live_slides if deck_id in live else self.stage_slides
             title = read_title(source / deck_id) or deck_id
-            result.append(Deck(deck_id, title, status))
+            when = times.get(deck_id) if deck_id in public else None
+            result.append(Deck(deck_id, title, status, when))
         return result
 
     def is_live(self) -> bool:
@@ -140,12 +147,14 @@ class Store:
         if deck_id not in _deck_ids(self.live_slides):
             raise PublishError(f"Deck '{deck_id}' does not exist in the workspace.")
         self._change_and_build(deck_id, lambda target: shutil.copytree(source, target))
+        self._set_time(deck_id, datetime.now(timezone.utc).isoformat(timespec="seconds"))
 
     def unpublish(self, deck_id: str) -> None:
         self._check_id(deck_id)
         if deck_id not in _deck_ids(self.stage_slides):
             raise PublishError(f"Deck '{deck_id}' is not published.")
         self._change_and_build(deck_id, lambda target: None)
+        self._set_time(deck_id, None)
 
     def rebuild(self) -> None:
         """Rebuild the public site from the current snapshots."""
@@ -153,6 +162,22 @@ class Store:
         self._build()
 
     # ---- internals ------------------------------------------------------
+
+    def _times(self) -> dict[str, str]:
+        try:
+            return json.loads(self.times_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+
+    def _set_time(self, deck_id: str, when: str | None) -> None:
+        times = self._times()
+        if when is None:
+            times.pop(deck_id, None)
+        else:
+            times[deck_id] = when
+        tmp = self.times_file.with_suffix(".tmp")
+        tmp.write_text(json.dumps(times, indent=2, sort_keys=True), encoding="utf-8")
+        os.replace(tmp, self.times_file)
 
     @staticmethod
     def _check_id(deck_id: str) -> None:

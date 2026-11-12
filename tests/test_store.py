@@ -138,6 +138,22 @@ class StoreTest(unittest.TestCase):
         self.assertLessEqual(len(releases), 3)
         self.assertIn(self.store.current.resolve(), [p.resolve() for p in releases])
 
+    def test_publish_time_is_recorded_and_cleared(self):
+        self.store.publish("alpha")
+        when = {d.id: d.published_at for d in self.store.decks()}
+        self.assertIsNotNone(when["alpha"])
+        self.assertIsNone(when["beta"])
+        self.store.unpublish("alpha")
+        self.assertIsNone({d.id: d.published_at for d in self.store.decks()}["alpha"])
+
+    def test_failed_publish_keeps_previous_time(self):
+        self.store.publish("alpha")
+        before = self.store.decks()[0].published_at
+        (self.ws / "slides" / "alpha" / "FAIL").write_text("")
+        with self.assertRaises(PublishError):
+            self.store.publish("alpha")
+        self.assertEqual(self.store.decks()[0].published_at, before)
+
     def test_stage_links_node_modules_and_copies_config(self):
         self.store.publish("alpha")
         self.assertTrue((self.store.stage / "node_modules").is_symlink())
