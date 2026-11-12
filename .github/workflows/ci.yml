@@ -25,4 +25,4 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: shellcheck deploy/install.sh
+      - run: shellcheck deploy/install.sh deploy/autosave/slides-autosave

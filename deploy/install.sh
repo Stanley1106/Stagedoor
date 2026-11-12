@@ -24,7 +24,7 @@ export DEBIAN_FRONTEND=noninteractive
 
 log "Packages"
 apt-get update -qq
-apt-get install -y -qq curl ca-certificates gnupg git python3 caddy >/dev/null
+apt-get install -y -qq curl ca-certificates gnupg git python3 caddy inotify-tools >/dev/null
 if ! node -e 'const [a,b]=process.versions.node.split(".").map(Number);process.exit(a>22||(a===22&&b>=12)||(a===20&&b>=19)?0:1)' 2>/dev/null; then
   curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null
   apt-get install -y -qq nodejs >/dev/null
@@ -92,6 +92,9 @@ sed "s#/home/slide#${HOME_DIR}#g; s#^User=slide#User=${SLIDE_USER}#" \
   "${REPO_DIR}/deploy/systemd/openslide-dev.service" > /etc/systemd/system/openslide-dev.service
 sed "s#^User=slide#User=${SLIDE_USER}#" \
   "${REPO_DIR}/deploy/systemd/stagedoor.service" > /etc/systemd/system/stagedoor.service
+install -m 0755 "${REPO_DIR}/deploy/autosave/slides-autosave" /usr/local/bin/slides-autosave
+sed "s#/home/slide#${HOME_DIR}#g; s#^User=slide#User=${SLIDE_USER}#" \
+  "${REPO_DIR}/deploy/systemd/slides-autosave.service" > /etc/systemd/system/slides-autosave.service
 install -m 0644 "${REPO_DIR}/deploy/systemd/cloudflared.service" /etc/systemd/system/cloudflared.service
 if [[ -f /etc/caddy/Caddyfile ]] && ! cmp -s "${REPO_DIR}/deploy/caddy/Caddyfile" /etc/caddy/Caddyfile; then
   cp /etc/caddy/Caddyfile "/etc/caddy/Caddyfile.$(date +%Y%m%d%H%M%S).bak"
@@ -101,8 +104,8 @@ caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1
   || { caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile; exit 1; }
 
 systemctl daemon-reload
-systemctl enable -q openslide-dev stagedoor caddy
-systemctl restart openslide-dev stagedoor caddy
+systemctl enable -q openslide-dev stagedoor slides-autosave caddy
+systemctl restart openslide-dev stagedoor slides-autosave caddy
 if [[ -f /etc/cloudflared/tunnel.env ]]; then
   chmod 600 /etc/cloudflared/tunnel.env
   systemctl enable -q cloudflared && systemctl restart cloudflared
@@ -113,7 +116,7 @@ fi
 
 log "Checks"
 sleep 3
-for svc in openslide-dev stagedoor caddy; do printf '%-22s %s\n' "$svc" "$(systemctl is-active "$svc")"; done
+for svc in openslide-dev stagedoor slides-autosave caddy; do printf '%-22s %s\n' "$svc" "$(systemctl is-active "$svc")"; done
 curl -fsS -o /dev/null -w "editor    %{http_code}\n" -H "Host: ${EDIT_HOST}" http://127.0.0.1:5173/ || true
 curl -fsS -o /dev/null -w "publisher %{http_code}\n" http://127.0.0.1:8090/publish/healthz || true
 curl -fsS -o /dev/null -w "public    %{http_code}\n" http://127.0.0.1:8080/ || true

@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Commit changes under slides/ once edits settle. Part of Stagedoor: these
+# commits are the versions its History page lists and restores.
+#
+# Run from the root of an open-slide workspace that is a git repository.
+# Modelled on gitwatch and Obsidian Git's "backup after file change":
+#   - commit when slides/ has been quiet for QUIET seconds (default 30)
+#   - but never let edits go uncommitted for more than MAX_WAIT (default 300)
+#   - commit anything left over at startup, and re-check on every quiet tick
+#     so missed inotify events are still picked up
+#   - on failure (e.g. another git process holds index.lock), retry next tick;
+#     never delete lock files
+set -uo pipefail
+
+QUIET="${QUIET:-30}"
+MAX_WAIT="${MAX_WAIT:-300}"
+DIR="slides"
+# Editor swap/backup/partial files: neither a reason to commit nor content to
+# keep. Listed in .git/info/exclude (never committed) rather than as pathspec
+# excludes, because git skips new files when an exclude pathspec contains "~".
+JUNK=('*.swp' '*.swx' '*~' '*.tmp' '*.part')
+
+ignore_junk() {
+  local exclude
+  exclude=$(git rev-parse --git-path info/exclude) || return 0
+  mkdir -p "$(dirname "$exclude")"
+  touch "$exclude"
+  for pattern in "${JUNK[@]}"; do
+    grep -qxF -- "$pattern" "$exclude" || printf '%s\n' "$pattern" >> "$exclude"
+  done
+}
+
+commit() {
+  if ! git add -A -- "$DIR"; then
+    echo "git add failed; will retry" >&2
+    return 0
+  fi
+  git diff --cached --quiet -- "$DIR" && return 0
+  local decks
+  decks=$(git diff --cached --name-only -- "$DIR" | awk -F/ 'NF>2 {print $2}' | sort -u | paste -sd, -)
+  if git commit -q -m "autosave: ${decks:-$DIR}" -- "$DIR"; then
+    echo "committed $(git rev-parse --short HEAD) autosave: ${decks:-$DIR}"
+  else
+    echo "commit failed; will retry" >&2
+  fi
+}
+
+if [[ ! -d $DIR ]] || ! git rev-parse --git-dir >/dev/null 2>&1; then
+  echo "run from a git workspace with $DIR/" >&2
+  exit 1
+fi
+ignore_junk
+commit   # catch up on changes made while we were not running
+
+pending_since=0
+while true; do
+  if read -r -t "$QUIET" _event; then
+    (( pending_since )) || pending_since=$SECONDS
+    if (( SECONDS - pending_since < MAX_WAIT )); then
+      continue   # still editing: keep waiting for quiet
+    fi
+  fi
+  commit         # quiet for QUIET seconds, MAX_WAIT reached, or periodic check
+  pending_since=0
+done < <(inotifywait -m -r -q -e close_write,create,delete,moved_to,moved_from \
+           --exclude '(\.swp|\.swx|~|\.tmp|\.part)$' --format '%w%f' "$DIR")
+echo "inotifywait exited" >&2
+exit 1
