@@ -1,0 +1,7 @@
+# /etc/network/openslide-nat.nft on the Proxmox host.
+table ip openslide_nat {
+	chain postrouting {
+		type nat hook postrouting priority srcnat; policy accept;
+		ip saddr 10.20.20.0/24 oifname "vmbr0" masquerade
+	}
+}

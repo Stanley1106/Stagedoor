@@ -1,0 +1,17 @@
+[Unit]
+Description=Stagedoor (publish/unpublish UI, localhost only)
+After=network-online.target
+
+[Service]
+User=slide
+WorkingDirectory=/opt/stagedoor
+EnvironmentFile=/etc/stagedoor/publisher.env
+ExecStart=/usr/bin/python3 -m publisher
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+ProtectSystem=full
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

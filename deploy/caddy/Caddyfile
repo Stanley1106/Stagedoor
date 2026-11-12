@@ -1,0 +1,27 @@
+# Public, read-only site: serves the release the publisher last swapped in.
+{
+	admin off
+	auto_https off
+}
+
+:8080 {
+	bind 127.0.0.1
+	root * /home/slide/publish/current
+
+	# Short links: /my-deck -> /s/my-deck, keeping ?p=3 and other queries.
+	@shortlink_q {
+		path_regexp slide ^/([A-Za-z0-9_-]+)/?$
+		not path /s /s/
+		expression {query} != ""
+	}
+	redir @shortlink_q /s/{re.slide.1}?{query} 302
+	@shortlink {
+		path_regexp slide ^/([A-Za-z0-9_-]+)/?$
+		not path /s /s/
+	}
+	redir @shortlink /s/{re.slide.1} 302
+
+	encode gzip
+	try_files {path} /index.html
+	file_server
+}

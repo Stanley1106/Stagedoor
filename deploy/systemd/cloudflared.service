@@ -1,0 +1,18 @@
+# Remotely managed Cloudflare Tunnel. Put the tunnel token in
+# /etc/cloudflared/tunnel.env as TUNNEL_TOKEN=... (mode 600) so it never
+# shows up in `ps` output or in this unit.
+[Unit]
+Description=cloudflared tunnel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/cloudflared/tunnel.env
+# http2 + IPv4: networks that block UDP 7844 (QUIC) or lack IPv6 connect at
+# once instead of after a fallback timeout.
+ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel --protocol http2 --edge-ip-version 4 run
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,11 @@
+# /etc/network/interfaces.d/openslide on the Proxmox host.
+# A private NAT bridge for the open-slide container; bring it up with
+# `ifup vmbr2`. Adjust the uplink name in openslide-nat.nft if it is not vmbr0.
+auto vmbr2
+iface vmbr2 inet static
+	address 10.20.20.1/24
+	bridge-ports none
+	bridge-stp off
+	bridge-fd 0
+	post-up nft -f /etc/network/openslide-nat.nft
+	pre-down nft delete table ip openslide_nat || true
