@@ -6,6 +6,20 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-12
+
+### Added
+
+- Published decks are live: they republish automatically about a minute
+  after edits stop (`STAGEDOOR_SYNC_DELAY`). A failed sync keeps the last
+  good build and waits for the next edit before retrying.
+- Pause and Resume per deck, Sync Now, and `pause`, `resume` and `sync`
+  commands.
+
+### Changed
+
+- Decks published with 0.1.0 become live on upgrade.
+
 ## [0.1.0] - 2026-11-12
 
 ### Added
@@ -19,5 +33,6 @@ and the project uses [Semantic Versioning](https://semver.org/).
 - `deploy/install.sh` for Ubuntu/Debian, systemd units, a Caddyfile with
   `/<deck>` short links, and Proxmox network examples.
 
-[Unreleased]: https://github.com/Stanley1106/stagedoor/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Stanley1106/stagedoor/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Stanley1106/stagedoor/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Stanley1106/stagedoor/releases/tag/v0.1.0
