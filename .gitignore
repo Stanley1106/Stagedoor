@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# Node / open-slide workspaces used for local testing
+node_modules/
+dist/
+
+# Local runtime data and secrets
+*.env
+.env*
+publish-data/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
